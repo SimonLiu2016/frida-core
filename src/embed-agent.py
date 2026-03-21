@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import sys
 import struct
+import os
 
 
 def main(argv):
@@ -19,6 +20,11 @@ def main(argv):
             agent_emulated_modern, agent_emulated_legacy, \
             agent_dbghelp_prefix, agent_symsrv_prefix \
             = [Path(p) if p else None for p in args[:6]]
+
+    # ========== 新增：定义反反Frida脚本路径 ==========
+    # 对应原shell中的custom_script路径，根据实际项目结构调整
+    custom_script = output_dir / "anti-anti-frida.py"
+    # ===============================================
 
     if agent_modern is None and agent_legacy is None:
         print("At least one agent must be provided", file=sys.stderr)
@@ -38,6 +44,10 @@ def main(argv):
             embedded_symsrv = priv_dir / f"symsrv-{arch}.dll"
 
             shutil.copy(agent, embedded_agent)
+            
+            # ========== 新增：调用反反Frida脚本 ==========
+            patch_anti_anti_frida(custom_script, embedded_agent)
+            # ===============================================
 
             if agent_dbghelp_prefix is not None:
                 shutil.copy(agent_dbghelp_prefix / arch / "dbghelp.dll", embedded_dbghelp)
@@ -67,6 +77,11 @@ def main(argv):
             shutil.copy(agent_modern, embedded_agent)
         else:
             shutil.copy(agent_legacy, embedded_agent)
+        
+        # ========== 新增：调用反反Frida脚本 ==========
+        patch_anti_anti_frida(custom_script, embedded_agent)
+        # ===============================================
+        
         embedded_assets += [embedded_agent]
     elif host_os in {"linux", "android"}:
         for agent, flavor in [(agent_modern, "64"),
@@ -76,6 +91,11 @@ def main(argv):
             embedded_agent = priv_dir / f"frida-agent-{flavor}.so"
             if agent is not None:
                 shutil.copy(agent, embedded_agent)
+                
+                # ========== 新增：调用反反Frida脚本 ==========
+                patch_anti_anti_frida(custom_script, embedded_agent)
+                # ===============================================
+                
             else:
                 embedded_agent.write_bytes(b"")
             embedded_assets += [embedded_agent]
@@ -83,6 +103,11 @@ def main(argv):
         embedded_agent = priv_dir / "frida-agent.so"
         agent = agent_modern if agent_modern is not None else agent_legacy
         shutil.copy(agent, embedded_agent)
+        
+        # ========== 新增：调用反反Frida脚本 ==========
+        patch_anti_anti_frida(custom_script, embedded_agent)
+        # ===============================================
+        
         embedded_assets += [embedded_agent]
     else:
         print("Unsupported OS", file=sys.stderr)
@@ -96,6 +121,31 @@ def main(argv):
         "--output-basename", output_dir / "frida-data-agent",
     ] + embedded_assets, check=True)
 
+# ========== 新增：封装反反Frida补丁函数 ==========
+def patch_anti_anti_frida(script_path, agent_path):
+    """
+    调用anti-anti-frida.py脚本对Agent文件打补丁
+    :param script_path: anti-anti-frida.py的路径
+    :param agent_path: 待补丁的Agent文件路径
+    """
+    # 检查脚本是否存在
+    if not script_path.exists():
+        print(f"[WARNING] anti-anti-frida.py not found at {script_path}", file=sys.stderr)
+        return
+    
+    # 调用Python脚本打补丁
+    try:
+        print(f"[*] Patching frida-agent: {agent_path}")
+        subprocess.run(
+            ["python3", str(script_path), str(agent_path)],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"[ERROR] Failed to patch {agent_path}: {e.stderr}", file=sys.stderr)
+# =================================================
 
 def pop_cmd_array_arg(args):
     result = []
